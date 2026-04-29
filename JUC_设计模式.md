@@ -1,4 +1,4 @@
-# 两阶段终止模式-interrupt
+## 两阶段终止模式-interrupt
 
 
 
@@ -50,9 +50,7 @@ class TwoPhaseTermination {
 11:52:01 [monitor-thread] c.TwoPhaseTermination - 料理后事...
 ```
 
-
-
-# 保护性暂停-wait/notify
+## 保护性暂停-wait/notify
 
 ```java
 @Slf4j(topic = "c.保护性暂停")
@@ -150,7 +148,7 @@ public synchronized Object get(long timeout) {
 17:03:12 [t2] c.保护性暂停 - t2 结束
 ```
 
-# 一对一送信
+## 一对一送信
 
 ```java
 package com.tsw.bsynchronized;
@@ -264,4 +262,101 @@ class GuardedObject {
 }
 ```
 
-# 生产者-消费者
+## 生产者-消费者
+
+```java
+package com.tsw.bsynchronized;
+
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.LinkedList;
+import java.util.Queue;
+
+@Slf4j(topic = "c.生产者消费者")
+public class 生产者消费者 {
+    public static void main(String[] args) {
+        MessageQueue messageQueue = new MessageQueue(4);
+        for (int i = 0; i < 5; i++) {
+            int id = i;
+            new Thread(() -> {
+                messageQueue.put(new Message(id, "消息" + id));
+            }, "生产者" + i).start();
+        }
+        new Thread(() -> {
+            while (true) {
+                try { Thread.sleep(2000); } catch (InterruptedException e) { e.printStackTrace(); }
+                messageQueue.get();
+            }
+        }, "消费者").start();
+    }
+
+}
+// 消息队列类
+@Slf4j(topic = "c.MessageQueue")
+class MessageQueue {
+    private LinkedList<Message> list = new LinkedList<>();
+    // 容量
+    private int capacity;
+    public MessageQueue(int capacity) {
+        this.capacity = capacity;
+    }
+    // 获取消息
+    public Message get() {
+        synchronized (list) {
+            while (list.isEmpty()) {
+                log.debug("队列为空，等待...");
+                try {
+                    list.wait();
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+            Message message = list.removeFirst();
+            log.debug("消费消息：{}", message.getContent());
+            list.notifyAll();
+            return message;
+        }
+    }
+    public void put(Message message) {
+        synchronized (list) {
+            while (list.size() == capacity) {
+                log.debug("队列已满，等待...");
+                try {
+                    list.wait();
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+            log.debug("队列中有空余生产消息：{}", message.getContent());
+            list.addLast(message);
+            list.notifyAll();
+        }
+    }
+
+}
+class Message {
+    // 只提供 get 方法
+    @Getter
+    private Integer id;
+    @Getter
+    private String content;
+
+    public Message(Integer id, String content) {
+        this.id = id;
+        this.content = content;
+    }
+}
+21:21:51 [生产者1] c.MessageQueue - 队列中有空余生产消息：消息1
+21:21:51 [生产者2] c.MessageQueue - 队列中有空余生产消息：消息2
+21:21:51 [生产者3] c.MessageQueue - 队列中有空余生产消息：消息3
+21:21:51 [生产者0] c.MessageQueue - 队列中有空余生产消息：消息0
+21:21:51 [生产者4] c.MessageQueue - 队列已满，等待...
+21:21:53 [消费者] c.MessageQueue - 消费消息：消息1
+21:21:53 [生产者4] c.MessageQueue - 队列中有空余生产消息：消息4
+21:21:55 [消费者] c.MessageQueue - 消费消息：消息2
+21:21:57 [消费者] c.MessageQueue - 消费消息：消息3
+21:21:59 [消费者] c.MessageQueue - 消费消息：消息0
+21:22:01 [消费者] c.MessageQueue - 消费消息：消息4
+21:22:03 [消费者] c.MessageQueue - 队列为空，等待...
+```

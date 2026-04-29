@@ -430,15 +430,235 @@ throws InterruptedException {
 }
 ```
 
+## 7.Park & Unpark
 
+**都是 LockSupport 中的静态方法**
 
+```java
+@Slf4j(topic = "c.ParkUnpark")
+public class ParkUnpark {
+    public static void main(String[] args) throws InterruptedException {
+        Thread t1 = new Thread(() -> {
+            log.debug("start...");
+            
+            sleep(2000);
+            
+            log.debug("park...");
+            LockSupport.park();
+            log.debug("end...");
+        }, "t1");
+        t1.start();
 
+        // 主线程先 unpark 也可以唤醒这个线程后来的 park
+        sleep(1000);
+        log.debug("unpark...");
+        LockSupport.unpark(t1);
+    }
+}
+21:31:40 [t1] c.ParkUnpark - start...
+21:31:41 [main] c.ParkUnpark - unpark...
+21:31:42 [t1] c.ParkUnpark - park...
+21:31:42 [t1] c.ParkUnpark - end...
+```
 
+**特点：**
 
+与 wait-notify 相比
 
+- wait、notify 和 notifyAll 必须配合 Monitor 使用
+- park 和 unpark 是以线程为单位来进行 阻塞 和 唤醒 线程，而 noitfy 只能随机唤醒一个线程，noitfyAll 唤醒所有线程，没有那么精确
+- park 和 unpark 可以先 unpark ，但是 wait 和 noitfy 不可以先 noitfy 或者 noitfyAll
 
+## 8.死锁
 
+**产生条件：**
 
+- 互斥条件
+- 请求与保持条件
+- 不可剥夺条件
+- 循环等待条件
+
+```java
+public class DeadLockDemo {
+
+    private static final Object lockA = new Object();
+    private static final Object lockB = new Object();
+
+    public static void main(String[] args) {
+
+        new Thread(() -> {
+            synchronized (lockA) {
+                System.out.println("线程1拿到了 lockA");
+
+                sleep(500);
+
+                synchronized (lockB) {
+                    System.out.println("线程1拿到了 lockB");
+                }
+            }
+        }, "线程1").start();
+
+        new Thread(() -> {
+            synchronized (lockB) {
+                System.out.println("线程2拿到了 lockB");
+
+                sleep(500);
+
+                synchronized (lockA) {
+                    System.out.println("线程2拿到了 lockA");
+                }
+            }
+        }, "线程2").start();
+    }
+}
+```
+
+**避免死锁：**
+
+- 固定加锁顺序（都按先 A 后 B 的顺序）
+- 减少锁的嵌套
+- 使用 tryLock 设置超时时间
+- 一次性申请所有资源
+- 避免长时间持有锁
+
+**哲学家就餐问题死锁版本：**
+
+```java
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
+
+@Slf4j(topic = "c.PhilosopherDemo")
+public class PhilosopherDemo {
+
+    public static void main(String[] args) {
+        Chopstick c1 = new Chopstick("1号筷子");
+        Chopstick c2 = new Chopstick("2号筷子");
+        Chopstick c3 = new Chopstick("3号筷子");
+        Chopstick c4 = new Chopstick("4号筷子");
+        Chopstick c5 = new Chopstick("5号筷子");
+
+        new Philosopher("苏格拉底", c1, c2).start();
+        new Philosopher("柏拉图", c2, c3).start();
+        new Philosopher("亚里士多德", c3, c4).start();
+        new Philosopher("赫拉克利特", c4, c5).start();
+        new Philosopher("阿基米德", c5, c1).start();
+    }
+}
+
+@Slf4j(topic = "c.Philosopher")
+class Philosopher extends Thread {
+
+    private final Chopstick left;
+    private final Chopstick right;
+
+    public Philosopher(String name, Chopstick left, Chopstick right) {
+        super(name);
+        this.left = left;
+        this.right = right;
+    }
+
+    @Override
+    public void run() {
+        while (true) {
+            synchronized (left) {
+                log.debug("拿到了左手边的 {}", left.getName());
+
+                synchronized (right) {
+                    log.debug("拿到了右手边的 {}", right.getName());
+                    eat();
+                }
+            }
+        }
+    }
+
+    private void eat() {
+        log.debug("正在吃饭...");
+        try {
+            TimeUnit.SECONDS.sleep(1);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+}
+
+class Chopstick {
+
+    private final String name;
+
+    public Chopstick(String name) {
+        this.name = name;
+    }
+
+    public String getName() {
+        return name;
+    }
+}
+```
+
+## 9.活锁
+
+**概述：**互相改变对方的终止条件，导致谁都结束不了
+
+```java
+// 共享变量
+static AtomicInteger count = new AtomicInteger(0);
+
+public static void main(String[] args) {
+    Thread addThread = new Thread(() -> {
+        while (true) {
+            // 如果发现 count 是 0，就加 1
+            if (count.get() == 0) {
+                System.out.println("加线程：发现 count = 0，我加 1");
+                count.incrementAndGet();
+                sleep(500);
+            }
+        }
+    }, "加线程");
+    Thread subThread = new Thread(() -> {
+        while (true) {
+            // 如果发现 count 是 1，就减 1
+            if (count.get() == 1) {
+                System.out.println("减线程：发现 count = 1，我减 1");
+                count.decrementAndGet();
+                sleep(500);
+            }
+        }
+    }, "减线程");
+    addThread.start();
+    subThread.start();
+}
+```
+
+## 10.线程饥饿
+
+```java
+public static void main(String[] args) {
+    Chopstick c1 = new Chopstick("1号筷子");
+    Chopstick c2 = new Chopstick("2号筷子");
+    Chopstick c3 = new Chopstick("3号筷子");
+    Chopstick c4 = new Chopstick("4号筷子");
+    Chopstick c5 = new Chopstick("5号筷子");
+    new Philosopher("苏格拉底", c1, c2).start();
+    new Philosopher("柏拉图", c2, c3).start();
+    new Philosopher("亚里士多德", c3, c4).start();
+    new Philosopher("赫拉克利特", c4, c5).start();
+    // 把最后一个改为顺序执行 不会产生死锁了，但是 阿基米德 会长时间拿不到Cpu的执行权
+    new Philosopher("阿基米德", c1, c5).start();
+}
+```
+
+## 11.ReentrantLock
+
+**特点：**
+
+- 可中断
+- 可以设置超时时间
+- 可以设置为公平锁
+- 支持多个条件变量
+
+与 synchronized 一样都支持可重入
 
 
 
