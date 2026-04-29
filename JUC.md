@@ -112,6 +112,324 @@ setPriority(int)
 
 - 在线程空闲时作用不大
 
+## 7.interrupt
+
+```java
+public static void main(String[] args) throws InterruptedException {
+    Thread t1 = new Thread(() -> {
+        log.debug("开始执行");
+        try {
+            Thread.sleep(5000);
+        } catch (InterruptedException e) {
+            log.debug(" interrupted");
+        }
+    }, "t1");
+    t1.start();
+    Thread.sleep(1000);
+    // 打断正在 sleep join wait 的线程，会抛出 InterruptedException 并清除打断标记
+    t1.interrupt();
+    log.debug("t1 打断标记：{}", t1.isInterrupted());
+    Thread t2 = new Thread(() -> {
+        log.debug("开始执行");
+        while (true) {
+            boolean interrupted = Thread.currentThread().isInterrupted();
+            if (interrupted) {
+                log.debug("料理后事.....");
+                log.debug("被打断，退出循环");
+                break;
+            }
+        }
+    }, "t2");
+    t2.start();
+    Thread.sleep(1000);
+    // 打断正在运行的线程不会抛出（不会让线程停止） InterruptedException 也不会清除打断标记
+    t2.interrupt();
+    log.debug("t2 打断标记：{}", t2.isInterrupted());
+}
+09:36:18 [t1] c.interruptTest - 开始执行
+09:36:19 [t1] c.interruptTest -  interrupted
+09:36:19 [main] c.interruptTest - t1 打断标记：false
+09:36:19 [t2] c.interruptTest - 开始执行
+09:36:20 [t2] c.interruptTest - 料理后事.....
+09:36:20 [t2] c.interruptTest - 被打断，退出循环
+09:36:20 [main] c.interruptTest - t2 打断标记：true
+```
+
+## 8.打断 park 线程
+
+```java
+public static void main(String[] args) throws InterruptedException {
+    Thread t1 = new Thread(() -> {
+        log.debug("开始执行...");
+        LockSupport.park();
+        log.debug("被唤醒...");
+        // log.debug("打断状态：{}", Thread.currentThread().isInterrupted());
+        log.debug("打断状态：{}", Thread.interrupted());
+        // 再次 park 不会停止，因为打断标记已经存在
+        // 解决方法：在 park 之前清除打断标记 ， 使用 Thread.interrupted() 方法
+        LockSupport.park();
+        log.debug("被唤醒...");
+    }, "t1");
+    t1.start();
+    Thread.sleep(2000);
+    t1.interrupt();
+}
+13:54:58 [t1] c.parkTest - 开始执行...
+13:55:00 [t1] c.parkTest - 被唤醒...
+13:55:00 [t1] c.parkTest - 打断状态：true
+阻塞................
+```
+
+## 9.守护线程
+
+```java
+public static void main(String[] args) {
+    Thread t1 = new Thread(() -> {
+        while (true) {
+            log.debug("t1 is running");
+        }
+    }, "t1");
+    // 如果不设置为守护线程，t1线程会一直运行，导致main线程无法退出
+    // 必须在 start 之前调用
+    t1.setDaemon(true);
+    t1.start();
+    log.debug("main is exiting");
+}
+```
+
+**常见的守护线程：**
+
+- 垃圾回收线程
+- 引用清理 / 信号调度线程
+
+## 10.线程状态
+
+**从 Java API 层面说**
+
+**根据 Thread .State 枚举，分为六种状态**
+
+| 英文状态        | 含义                                                   | 常见进入方式                                                 | 常见退出方式                                                 |
+| --------------- | ------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ |
+| `NEW`           | 线程对象已经创建，但还没有调用 `start()` 方法          | `Thread t = new Thread()`                                    | 调用 `t.start()` 后进入 `RUNNABLE`                           |
+| `RUNNABLE`      | 线程已经启动，可能正在运行，也可能在等待 CPU 时间片    | 调用 `start()`；从阻塞、等待、超时等待中恢复                 | 竞争锁失败进入 `BLOCKED`；调用等待方法进入 `WAITING/TIMED_WAITING`；执行结束进入 `TERMINATED` |
+| `BLOCKED`       | 线程正在等待获取对象监视器锁，也就是 `synchronized` 锁 | 进入 `synchronized` 代码块或方法时，锁被其他线程占用         | 获取到锁后进入 `RUNNABLE`                                    |
+| `WAITING`       | 线程无限期等待，需要其他线程显式唤醒                   | `Object.wait()`；`Thread.join()`；`LockSupport.park()`       | 被 `notify()` / `notifyAll()` 唤醒；被等待线程结束；`unpark()`；中断 |
+| `TIMED_WAITING` | 线程在指定时间内等待，到时间后自动恢复                 | `Thread.sleep(ms)`；`Object.wait(ms)`；`Thread.join(ms)`；`LockSupport.parkNanos()`；`parkUntil()` | 时间到；被唤醒；被中断                                       |
+| `TERMINATED`    | 线程执行完毕或异常结束                                 | `run()` 方法执行结束；线程抛出未捕获异常                     | 不能再转换为其他状态                                         |
+
+| 当前状态        | 触发条件                                         | 转换后的状态    |
+| --------------- | ------------------------------------------------ | --------------- |
+| `NEW`           | 调用 `start()`                                   | `RUNNABLE`      |
+| `RUNNABLE`      | 抢不到 `synchronized` 锁                         | `BLOCKED`       |
+| `BLOCKED`       | 获取到 `synchronized` 锁                         | `RUNNABLE`      |
+| `RUNNABLE`      | 调用 `Object.wait()`                             | `WAITING`       |
+| `RUNNABLE`      | 调用无参 `Thread.join()`                         | `WAITING`       |
+| `RUNNABLE`      | 调用 `LockSupport.park()`                        | `WAITING`       |
+| `WAITING`       | 被 `notify()` / `notifyAll()` 唤醒，并重新拿到锁 | `RUNNABLE`      |
+| `WAITING`       | `join()` 等待的线程执行结束                      | `RUNNABLE`      |
+| `WAITING`       | 被 `LockSupport.unpark()` 唤醒                   | `RUNNABLE`      |
+| `RUNNABLE`      | 调用 `Thread.sleep(time)`                        | `TIMED_WAITING` |
+| `RUNNABLE`      | 调用 `Object.wait(time)`                         | `TIMED_WAITING` |
+| `RUNNABLE`      | 调用 `Thread.join(time)`                         | `TIMED_WAITING` |
+| `RUNNABLE`      | 调用 `LockSupport.parkNanos()` / `parkUntil()`   | `TIMED_WAITING` |
+| `TIMED_WAITING` | 等待时间到                                       | `RUNNABLE`      |
+| `TIMED_WAITING` | 被唤醒或中断                                     | `RUNNABLE`      |
+| `RUNNABLE`      | `run()` 方法执行完毕                             | `TERMINATED`    |
+| `RUNNABLE`      | 抛出未捕获异常                                   | `TERMINATED`    |
+
+| 易混点                             | 说明                                                         |
+| ---------------------------------- | ------------------------------------------------------------ |
+| `RUNNABLE` 不一定真的在运行        | Java 中没有单独的 `RUNNING` 状态，正在运行和等待 CPU 时间片都属于 `RUNNABLE` |
+| `BLOCKED` 只针对 `synchronized` 锁 | 等待 `ReentrantLock` 一般不是 `BLOCKED`，通常表现为 `WAITING` |
+| `sleep()` 不会释放锁               | 当前线程睡眠，但如果它持有 `synchronized` 锁，不会释放       |
+| `wait()` 会释放锁                  | 调用 `wait()` 后，线程会释放当前对象的监视器锁               |
+| `notify()` 后不是立刻运行          | 被唤醒的线程还要重新竞争锁，拿到锁后才会进入 `RUNNABLE`      |
+| `TERMINATED` 后不能重新启动        | 一个线程对象只能调用一次 `start()`，结束后不能再次启动       |
+
+| 方法                      | 进入状态        | 是否释放锁             | 是否需要被唤醒                       | 说明                           |
+| ------------------------- | --------------- | ---------------------- | ------------------------------------ | ------------------------------ |
+| `Thread.sleep(time)`      | `TIMED_WAITING` | 不释放锁               | 不需要，时间到自动恢复               | 让当前线程睡眠指定时间         |
+| `Object.wait()`           | `WAITING`       | 释放锁                 | 需要 `notify()` / `notifyAll()` 唤醒 | 必须在 `synchronized` 中使用   |
+| `Object.wait(time)`       | `TIMED_WAITING` | 释放锁                 | 可以被唤醒，也可以时间到自动恢复     | 带超时时间的等待               |
+| `Thread.join()`           | `WAITING`       | 不释放当前持有的普通锁 | 等待目标线程结束                     | 当前线程等待另一个线程执行完成 |
+| `Thread.join(time)`       | `TIMED_WAITING` | 不释放当前持有的普通锁 | 目标线程结束或时间到                 | 带超时时间的线程等待           |
+| `LockSupport.park()`      | `WAITING`       | 不释放锁               | 需要 `unpark()` 唤醒                 | 常用于 JUC 并发工具底层        |
+| `LockSupport.parkNanos()` | `TIMED_WAITING` | 不释放锁               | 可以被 `unpark()` 唤醒，也可以时间到 | 纳秒级超时等待                 |
+
+| 问题                                   | 答案                                                         |
+| -------------------------------------- | ------------------------------------------------------------ |
+| Java 线程有几种状态？                  | 6 种：`NEW`、`RUNNABLE`、`BLOCKED`、`WAITING`、`TIMED_WAITING`、`TERMINATED` |
+| Java 中有 `RUNNING` 状态吗？           | 没有。正在运行和等待 CPU 调度都属于 `RUNNABLE`               |
+| `BLOCKED` 和 `WAITING` 有什么区别？    | `BLOCKED` 是等待 `synchronized` 锁；`WAITING` 是主动进入无限期等待，需要其他线程唤醒 |
+| `sleep()` 和 `wait()` 最大区别是什么？ | `sleep()` 不释放锁；`wait()` 会释放锁                        |
+| `notify()` 后线程会马上运行吗？        | 不会。被唤醒后还要重新竞争锁，拿到锁后才可能运行             |
+| `start()` 后线程一定立刻执行吗？       | 不一定。调用 `start()` 后线程进入 `RUNNABLE`，是否立刻执行取决于 CPU 调度 |
+| 线程结束后还能再次调用 `start()` 吗？  | 不能。线程一旦进入 `TERMINATED`，再次调用 `start()` 会抛出 `IllegalThreadStateException` |
+
+# synchronized
+
+## 1.加在不同位置
+
+```java
+// 加在成员方法上，相当于锁住的是当前的 this 对象
+public synchronized void increment() {
+    count++;
+}
+
+// 加在静态方法上，相当于锁住的是当前类的对象 xxx.class
+public static synchronized void increment() {
+    count++;
+}
+```
+
+## 2.常见线程安全类
+
+String 	Integer	StringBuffer	Random	HashTable	juc包下的类
+
+- 多个线程调用他们同一个实例的某个方法时，是线程安全的
+- 它们的每个方法是原子的
+- 但是多个方法组合起来不一定线程安全
+
+## 3.Java对象头
+
+**组要组成部分：**
+
+Mark Word：存储 hashCode、GC 年龄、锁状态等信息
+Klass Pointer：指向类元数据的指针（对象的类型信息）
+
+**注：**数组对象多一个 length 数组长度（4个字节）
+
+**普通对象**
+
+| JVM 情况                  | Mark Word | Klass Pointer | 对象头大小      |
+| ------------------------- | --------- | ------------- | --------------- |
+| 32 位 JVM                 | 32 位     | 32 位         | 64 位，8 字节   |
+| 64 位 JVM，未开启压缩指针 | 64 位     | 64 位         | 128 位，16 字节 |
+| 64 位 JVM，开启压缩指针   | 64 位     | 32 位         | 96 位，12 字节  |
+
+**数组对象**
+
+| JVM 情况                  | Mark Word | Klass Pointer | 数组长度 | 数组对象头大小                      |
+| ------------------------- | --------- | ------------- | -------- | ----------------------------------- |
+| 32 位 JVM                 | 32 位     | 32 位         | 32 位    | 96 位，12 字节                      |
+| 64 位 JVM，未开启压缩指针 | 64 位     | 64 位         | 32 位    | 160 位，20 字节，通常对齐到 24 字节 |
+| 64 位 JVM，开启压缩指针   | 64 位     | 32 位         | 32 位    | 128 位，16 字节                     |
+
+**32 位 JVM 中 Mark Word 的结构：**
+
+| 对象状态                          | Mark Word 内容结构                                     |     biased_lock | 锁标志位 | 主要含义                                                     |
+| --------------------------------- | ------------------------------------------------------ | --------------: | -------: | ------------------------------------------------------------ |
+| Normal / 无锁状态                 | `hashcode:25 \| age:4 \| biased_lock:0 \| 01`          | 0（不是偏向锁） |       01 | 普通无锁对象，Mark Word 中可以存储对象的 hashCode、GC 年龄等信息 |
+| Biased / 偏向锁状态               | `thread:23 \| epoch:2 \| age:4 \| biased_lock:1 \| 01` |   1（是偏向锁） |       01 | 对象偏向某个线程，Mark Word 中存储偏向线程 ID、epoch、GC 年龄等 |
+| Lightweight Locked / 轻量级锁状态 | `ptr_to_lock_record:30 \| 00`                          |               - |       00 | Mark Word 中存储指向线程栈中 Lock Record 的指针              |
+| Heavyweight Locked / 重量级锁状态 | `ptr_to_heavyweight_monitor:30 \| 10`                  |               - |       10 | Mark Word 中存储指向 ObjectMonitor 的指针                    |
+| Marked for GC / GC 标记状态       | `空:30 \| 11`                                          |               - |       11 | 对象被 GC 标记，表示与垃圾回收相关的特殊状态                 |
+
+## 4.Monitor 原理
+
+![image-20260429153809688](./JUC.assets/image-20260429153809688.png)
+
+```java
+static final Object lock = new Object();
+static int counter = 0;
+public static void main(String[] args) throws InterruptedException {
+    synchronized (lock) {
+        counter++;
+    }
+}
+```
+
+```class
+Compiled from "test1.java"
+public class com.tsw.bsynchronized.test1 {
+  static final java.lang.Object lock;
+
+  static int counter;
+
+  public com.tsw.bsynchronized.test1();
+    Code:
+       0: aload_0
+       1: invokespecial #1                  // Method java/lang/Object."<init>":()V
+       4: return
+
+  public static void main(java.lang.String[]) throws java.lang.InterruptedException;
+    Code:
+       0: getstatic     #2                  // Field lock:Ljava/lang/Object;  得到 lock 的引用
+       3: dup								// 复制 lock 的引用
+       4: astore_1							// 将 lock 的引用赋值给 slot1
+       5: monitorenter						// 将 Mark Word 指向 Monitor
+       
+       6: getstatic     #3                  // Field counter:I   准备变量
+       9: iconst_1							// 准备常量 1
+      10: iadd								// 加1
+      11: putstatic     #3                  // Field counter:I	赋值给变量
+      
+      14: aload_1							// 拿到 slot1 中的 lock 引用地址
+      15: monitorexit						// 解锁，将 lock 对象中的 MarkWord 重置，唤醒 EntryList 
+      16: goto          24					// 到24行 return
+      
+      19: astore_2							// 将异常变量存储到 slot2
+      20: aload_1							// 拿到 slot1 中的 lock 引用地址
+      21: monitorexit						// 解锁，将 lock 对象中的 MarkWord 重置，唤醒 EntryList
+      22: aload_2							// 拿到异常对象
+      23: athrow							// throw e
+      
+      24: return
+    Exception table:
+       from    to  target type
+           6    16    19   any		// 6-19行如果出现异常，将会执行19行的代码
+          19    22    19   any
+
+  static {};
+    Code:
+       0: new           #4                  // class java/lang/Object
+       3: dup
+       4: invokespecial #1                  // Method java/lang/Object."<init>":()V
+       7: putstatic     #2                  // Field lock:Ljava/lang/Object;
+      10: iconst_0
+      11: putstatic     #3                  // Field counter:I
+      14: return
+}
+```
+
+## 5.wait-notify原理
+
+![image-20260429160924473](./JUC.assets/image-20260429160924473.png)
+
+- Owner 线程发现条件不满足，调用 wait 方法，即可进入 WaitSet 变为 WAITING 状态
+- BLOCKED 和 WAITING 的线程都处于阻塞状态，**不占用 CPU 时间片**
+- BLOCKED 线程会在 Owner 线程释放锁时唤醒
+- WAITING 线程会在 Owner 线程调用 notify 或 notifyAll 时唤醒，但唤醒后并不意味者立刻获得锁，仍需进入 EntryList 重新竞争
+
+## 6.join 原理（保护性暂停）
+
+```java
+public final synchronized void join(long millis)
+throws InterruptedException {
+    long base = System.currentTimeMillis();
+    // 经历时间
+    long now = 0;
+    if (millis < 0) {
+        throw new IllegalArgumentException("timeout value is
+    }
+    if (millis == 0) {
+        while (isAlive()) {
+            wait(0);
+        }
+    } else {
+        while (isAlive()) {
+            // 经历时间大于等待时间就退出
+            long delay = millis - now;
+            if (delay <= 0) {
+                break;
+            }
+            wait(delay);
+            now = System.currentTimeMillis() - base;
+        }
+    }
+}
+```
+
 
 
 
