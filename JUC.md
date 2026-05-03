@@ -660,5 +660,435 @@ public static void main(String[] args) {
 
 与 synchronized 一样都支持可重入
 
+**可中断：**`lockInterruptibly() 方法`
 
+```java
+private static ReentrantLock lock = new ReentrantLock();
+public static void main(String[] args) throws InterruptedException {
+    // 可打断
+    Thread t1 = new Thread(() -> {
+        try {
+            // 如果有竞争没有抢到锁，进入阻塞队列，可以由其他线程用 interrupt() 方法打断
+            lock.lockInterruptibly();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+            log.debug("没有获取到锁，被打断");
+            return;
+        }
+        try {
+            log.debug("获取到锁");
+        } finally {
+            lock.unlock();
+        }
+    }, "t1");
+    log.debug("主线程先获取锁");
+    lock.lock();
+    
+    t1.start();
+    
+    sleep(2000);
+    log.debug("打断 t1 线程");
+    
+    t1.interrupt();
+    lock.unlock();
+}
+09:04:16 [main] c.ReentrantLock - 主线程先获取锁
+09:04:18 [main] c.ReentrantLock - 打断 t1 线程
+09:04:18 [t1] c.ReentrantLock - 没有获取到锁，被打断
+java.lang.InterruptedException
+	
+```
+
+**可打断：**`tryLock()` 
+
+```java
+private static ReentrantLock lock = new ReentrantLock();
+public static void main(String[] args) throws InterruptedException {
+    Thread t1 = new Thread(() -> {
+        log.debug("尝试获取锁");
+        try {
+            if (!lock.tryLock(2, TimeUnit.SECONDS)) {
+                log.debug("获取锁失败");
+                return;
+            }
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+            log.debug("没有获取到锁，被打断");
+            return;
+        }
+        try {
+            log.debug("获取到锁");
+        } finally {
+            log.debug("释放锁...");
+            lock.unlock();
+        }
+    }, "t1");
+    lock.lock();
+    t1.start();
+    sleep(3000);
+    log.debug("释放锁...");
+    lock.unlock();
+}
+09:10:50 [t1] c.rerntrantLock可超时 - 尝试获取锁
+09:10:52 [t1] c.rerntrantLock可超时 - 获取锁失败
+09:10:53 [main] c.rerntrantLock可超时 - 释放锁...
+```
+
+可以利用 tryLock 和 超时锁 **解决哲学家就餐的死锁问题**
+
+**公平锁：**创建 ReentrantLock 对象是，构造方法传递 true
+
+```java
+private static ReentrantLock lock = new ReentrantLock(true);
+```
+
+**多个条件变量：**`lock.newCondition()`    	等待：`condition.await();`	   唤醒：`condition.signal()`
+
+```java
+private static ReentrantLock lock = new ReentrantLock(true);
+public static void main(String[] args) throws InterruptedException {
+    Condition condition = lock.newCondition();
+    Thread t1 = new Thread(() -> {
+        log.debug("尝试获取锁");
+        try {
+            lock.lock();
+            // 获取锁成功，但是条件不满足，等待
+            log.debug("条件不满足，等待.....");
+            condition.await();
+            log.debug("被唤醒，继续执行....");
+        } catch (Exception e) {
+            e.printStackTrace();
+        } finally {
+            lock.unlock();
+        }
+    }, "t1");
+    
+    t1.start();
+    
+    sleep(2000);
+    log.debug("主线程获取锁，并唤醒t1");
+    
+    lock.lock();
+    condition.signal();
+    // condition.signalAll();
+    
+    log.debug("唤醒完成");
+}
+09:23:02 [t1] c.rerntrantLock条件变量 - 尝试获取锁
+09:23:02 [t1] c.rerntrantLock条件变量 - 条件不满足，等待.....
+09:23:04 [main] c.rerntrantLock条件变量 - 主线程获取锁，并唤醒t1
+09:23:04 [main] c.rerntrantLock条件变量 - 唤醒完成
+```
+
+# 可见性 和 原子性 和 有序性
+
+## 1.可见性 问题 及 原因
+
+```java
+static boolean flag = true;
+public static void main(String[] args) throws InterruptedException {
+    Thread t1 = new Thread(() -> {
+        // 程序并不会像预想的停止
+        while (flag) {
+            // ...
+        }
+    });
+    t1.start();
+    Thread.sleep(2000);
+    log.debug("停止 t1 线程");
+    flag = false;
+}
+```
+
+![image-20260430152410773](./JUC.assets/image-20260430152410773.png)
+
+![image-20260430152432812](./JUC.assets/image-20260430152432812.png)
+
+![image-20260430152456998](./JUC.assets/image-20260430152456998.png)
+
+## 2.可见性 解决
+
+为变量加上 volatile 关键字。它可以用来修饰静态成员变量和静态成员变量，它可以避免线程从自己的工作缓存中读取变量的值，而是必须到主存中查找，线程操作 volatile 都是直接在主存进行操作
+
+## 3.原子性
+
+volatile 只能解决可见性，保证每次读取的都是主存中的值，但是不能解决原子性。这时候就可以使用 synchronized 来解决 synchronized 既可以保证代码块的 原子性 又可以保证代码块内变量的 可见性
+
+## 4.有序性
+
+CPU底层会对一些不影响最终结果的代码进行指令重排序
+
+![image-20260430155321098](./JUC.assets/image-20260430155321098.png)
+
+## 5.有序性 解决
+
+使用 volatile 
+
+## 6.volatile 如何保证可见性
+
+- 写屏障（sfence）保证在该屏障之前的，对共享变量的改动，都同步到主存当中
+
+- ```java
+  public void actor2(I_Result r) {
+      num = 2;
+      ready = true; // ready 是 volatile 赋值带写屏障
+      // 写屏障
+  }
+  ```
+
+- 而读屏障（lfence）保证在该屏障之后，对共享变量的读取，加载的是主存中最新数据
+
+- ```java
+  public void actor1(I_Result r) {
+      // 读屏障
+      // ready 是 volatile 读取值带读屏障
+      if(ready) {
+          r.r1 = num + num;
+      } else {
+          r.r1 = 1;
+      }
+  }
+  ```
+
+## 7.volatile 如何保证有序性
+
+**注：**只能保证线程内的相关代码不被重排序
+
+- 写屏障 会确保指令重排序时，不会将写屏障之前的代码排在写屏障之后
+
+- ```java
+  public void actor2(I_Result r) {
+      num = 2;
+      ready = true; // ready 是 volatile 赋值带写屏障
+      // 写屏障
+  }
+  ```
+
+- 而读屏障 会确保指令重排序时，不会将读屏障之后的代码排在读屏障之前
+
+- ```java
+  public void actor1(I_Result r) {
+      // 读屏障
+      // ready 是 volatile 读取值带读屏障
+      if(ready) {
+          r.r1 = num + num;
+      } else {
+          r.r1 = 1;
+      }
+  }
+  ```
+
+## 8.单例模式 双重检查
+
+```java
+public class Singleton {
+
+    private static volatile Singleton instance;
+
+    private Singleton() {
+    }
+
+    public static Singleton getInstance() {
+        if (instance == null) {
+            synchronized (Singleton.class) {
+                if (instance == null) {
+                    instance = new Singleton();
+                }
+            }
+        }
+        return instance;
+    }
+}
+1. 分配内存空间						1. 分配内存空间
+2. 初始化对象						 2. 把对象地址赋值给 instance        所以要加 volatile
+3. 把对象地址赋值给 instance		   3. 初始化对象	
+```
+
+# CAS
+
+## 1.AtomicInteger
+
+**主要实现方式：compareAndSet() 方法**   **注意：**还要使用 volatile 修饰来保证可见性
+
+```java
+@Override
+public void withdraw(Integer money) {
+    while (true) {
+        // 获取余额最新值
+        int prev = balance.get();
+        // 修改后的余额
+        int next = prev - money;
+        // 尝试修改 只有修改时 balance.get() 跟 prev 一样的时候（也就是没有别的线程对 AtomicInteger 进行修改）修改成功
+        if (balance.compareAndSet(prev, next)) {
+            break;
+        }
+    }
+}
+```
+
+```java
+@Slf4j(topic = "c.CAS")
+public class test {
+    public static void main(String[] args) {
+        AccountCas account = new AccountCas(10000);
+        Account.demo(account);
+        account.getBalance();
+        log.debug("余额：{}", account.getBalance());
+    }
+}
+class AccountCas implements Account {
+    private volatile AtomicInteger balance;
+
+    public AccountCas(int balance) {
+        this.balance = new AtomicInteger(balance);
+    }
+
+    @Override
+    public void withdraw(Integer money) {
+        while (true) {
+            // 获取余额最新值
+            int prev = balance.get();
+            // 修改后的余额
+            int next = prev - money;
+            // 尝试修改 只有 修改时还是 prev 的时候修改成功
+            if (balance.compareAndSet(prev, next)) {
+                break;
+            }
+        }
+    }
+
+    @Override
+    public Integer getBalance() {
+        return balance.get();
+    }
+}
+interface Account {
+    void withdraw(Integer money);
+    Integer getBalance();
+
+    // 测试方法 启动 1000 个线程同时取款
+    static void demo (Account account) {
+        List<Thread> threads = new ArrayList<>();
+        for (int i = 0; i < 1000; i++) {
+            threads.add(new Thread(() -> {
+                account.withdraw(10);
+            }));
+        }
+        long start = System.currentTimeMillis();
+        threads.forEach(Thread::start);
+        threads.forEach(thread -> {
+            try {
+                thread.join();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        });
+        long end = System.currentTimeMillis();
+        System.out.println(end - start);
+    }
+}
+```
+
+## 2.为什么无锁效率高
+
+- 使用锁的时候上下文切换的成本较高
+
+## 3.特点
+
+- 可以结合 volatile 实现无锁并发 ，适用于线程数少、多核CPU的场景下
+- CAS 是基于乐观锁的思想：别人修改也没事，重试就好了
+- synchronized 是悲观锁
+- 如果竞争激烈，重试频繁，性能也会收到影响
+
+## 4.原子整数
+
+```java
+public static void main(String[] args) {
+    atomicInteger atomicInteger = new AtomicInteger(5);
+    /*// 自增并获取 ++i
+    log.debug("{}", atomicInteger.incrementAndGet());
+    // 获取并自增 i++
+    log.debug("{}", atomicInteger.getAndIncrement());
+    // 获取并增加
+    log.debug("{}", atomicInteger.getAndAdd(5));
+    // 增加并获取
+    log.debug("{}", atomicInteger.addAndGet(5));*/
+    // 获取并更新
+    atomicInteger.getAndUpdate(i -> i * 10);
+    // 更新并获取
+    atomicInteger.updateAndGet(i -> i * 10);
+}
+```
+
+除了 atomicInteger 还有 AtomicLong、 AtomicBoolean
+
+## 5.原子引用
+
+```java
+package com.tsw.CAS;
+
+import lombok.extern.slf4j.Slf4j;
+
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
+
+@Slf4j(topic = "c.原子引用")
+public class 原子引用 {
+    public static void main(String[] args) {
+        DecimalAccount account = new DecimalAccount(new BigDecimal(10000));
+        Pay.demo(account);
+        log.debug("余额：{}", account.getBalance());
+    }
+}
+class DecimalAccount implements Pay {
+    private AtomicReference<BigDecimal> balance;
+
+    public DecimalAccount(BigDecimal balance) {
+        this.balance = new AtomicReference<>(balance);
+    }
+
+    @Override
+    public void withdraw(Integer money) {
+        while (true) {
+            if (balance.compareAndSet(balance.get(), balance.get().subtract(new BigDecimal(money)))) {
+                break;
+            }
+        }
+    }
+
+    @Override
+    public BigDecimal getBalance() {
+        return balance.get();
+    }
+}
+interface Pay {
+    void withdraw(Integer money);
+    BigDecimal getBalance();
+
+    // 测试方法 启动 1000 个线程同时取款
+    static void demo (Pay account) {
+        List<Thread> threads = new ArrayList<>();
+        for (int i = 0; i < 1000; i++) {
+            threads.add(new Thread(() -> {
+                account.withdraw(10);
+            }));
+        }
+        long start = System.currentTimeMillis();
+        threads.forEach(Thread::start);
+        threads.forEach(thread -> {
+            try {
+                thread.join();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        });
+        long end = System.currentTimeMillis();
+        System.out.println(end - start);
+    }
+
+```
+
+## 6.ABA问题
 

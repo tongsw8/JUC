@@ -360,3 +360,151 @@ class Message {
 21:22:01 [消费者] c.MessageQueue - 消费消息：消息4
 21:22:03 [消费者] c.MessageQueue - 队列为空，等待...
 ```
+
+## 交替输出1-wait/notify
+
+```java
+package com.tsw.bsynchronized;
+
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j(topic = "c.交替输出")
+public class 交替输出 {
+    public static void main(String[] args) {
+        Alternate alternate = new Alternate(1, 3);
+        new Thread(() -> {
+            alternate.print(1, "a", 2);
+        }).start();
+        new Thread(() -> {
+            alternate.print(2, "b", 3);
+        }).start();
+        new Thread(() -> {
+            alternate.print(3, "c", 1);
+        }).start();
+    }
+}
+@Slf4j(topic = "c.Alternate")
+class Alternate {
+    // 等待标记
+    private int flag;
+    // 循环次数
+    private int loopNumber;
+
+    public Alternate(int flag, int loopNumber) {
+        this.flag = flag;
+        this.loopNumber = loopNumber;
+    }
+    // 1 a 2
+    // 2 b 3
+    // 3 c 1
+    public void print(int waitFlag, String str, int nextWaitFlag) {
+        for (int i = 0; i < loopNumber; i++) {
+            synchronized (this) {
+                while (waitFlag != flag) {
+                    try {
+                        this.wait();
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                }
+                log.debug(str);
+                flag = nextWaitFlag;
+                this.notifyAll();
+            }
+        }
+    }
+}
+```
+
+## 交替输出2-多条件变量
+
+```java
+public class 交替输出3 {
+    public static void main(String[] args) throws InterruptedException {
+        Alternate3 alternate = new Alternate3(3);
+        Condition flaga = alternate.newCondition();
+        Condition flagb = alternate.newCondition();
+        Condition flagc = alternate.newCondition();
+        new Thread(() -> {
+            alternate.print(flaga, "a", flagb);
+        }).start();
+        new Thread(() -> {
+            alternate.print(flagb, "b", flagc);
+        }).start();
+        new Thread(() -> {
+            alternate.print(flagc, "c", flaga);
+        }).start();
+
+        Thread.sleep(1000);
+        alternate.lock();
+        try {
+            flaga.signal();
+        } finally {
+            alternate.unlock();
+        }
+    }
+}
+class Alternate3 extends ReentrantLock {
+    private int loopNumber;
+    public Alternate3(int loopNumber) {
+        this.loopNumber = loopNumber;
+    }
+    public void print(Condition flag, String str, Condition nextFlag) {
+        for (int i = 0; i < loopNumber; i++) {
+            this.lock();
+            try {
+                flag.await();
+                System.out.print(str);
+                nextFlag.signal();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            } finally {
+                this.unlock();
+            }
+        }
+    }
+}
+```
+
+## 交替输出3-park/unpark
+
+```java
+package com.tsw.bsynchronized;
+
+import java.util.concurrent.locks.LockSupport;
+
+public class 交替输出2 {
+    static Thread t1;
+    static Thread t2;
+    static Thread t3;
+    public static void main(String[] args) {
+        Alternate2 alternate = new Alternate2(3);
+        t1 = new Thread(() -> {
+            alternate.print("a", t2);
+        });
+        t2 = new Thread(() -> {
+            alternate.print("b", t3);
+        });
+        t3 = new Thread(() -> {
+            alternate.print("c", t1);
+        });
+        t1.start();
+        t2.start();
+        t3.start();
+        LockSupport.unpark(t1);
+    }
+}
+class Alternate2 {
+    private int loopNumber;
+    public Alternate2(int loopNumber) {
+        this.loopNumber = loopNumber;
+    }
+    public void print(String str, Thread nextThread) {
+        for (int i = 0; i < loopNumber; i++) {
+            LockSupport.park();
+            System.out.print(str);
+            LockSupport.unpark(nextThread);
+        }
+    }
+}
+```
